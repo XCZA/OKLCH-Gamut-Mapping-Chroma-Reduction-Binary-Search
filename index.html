@@ -1,0 +1,1712 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>OKLCH Gamut Mapping — Technical Deep Dive</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+<style>
+/* ── Tokens ──────────────────────────────────────────────── */
+:root {
+  --bg:       #09090f;
+  --surface:  #0f1219;
+  --card:     #141925;
+  --card2:    #191f2e;
+  --border:   #1d2840;
+  --border2:  #243050;
+  --text:     #c2d0e8;
+  --muted:    #6878a0;
+  --dim:      #3d4f72;
+  --blue:     #4f8ef7;
+  --blue-dim: #2a4a8a;
+  --green:    #3ecf8e;
+  --red:      #f06464;
+  --yellow:   #f5a623;
+  --purple:   #a78bfa;
+  --mono:     'SF Mono','Cascadia Code','Fira Code',ui-monospace,monospace;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+/* ── Layout ──────────────────────────────────────────────── */
+.layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  min-height: 100vh;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────── */
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  padding: 32px 0 32px 24px;
+  border-right: 1px solid var(--border);
+  scrollbar-width: thin;
+}
+.sidebar-logo {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--blue);
+  margin-bottom: 28px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.toc-section { margin-bottom: 20px; }
+.toc-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 8px;
+  display: block;
+}
+.toc-link {
+  display: block;
+  font-size: 12.5px;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 5px 12px 5px 0;
+  border-right: 2px solid transparent;
+  margin-right: -1px;
+  transition: color 0.15s, border-color 0.15s;
+  line-height: 1.3;
+}
+.toc-link:hover, .toc-link.active {
+  color: var(--text);
+  border-right-color: var(--blue);
+}
+.toc-link.active { color: var(--blue); }
+
+/* ── Main ────────────────────────────────────────────────── */
+main {
+  padding: 48px 64px 96px 64px;
+  max-width: 900px;
+}
+
+/* ── Section ─────────────────────────────────────────────── */
+section {
+  margin-bottom: 80px;
+  scroll-margin-top: 32px;
+}
+.section-tag {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--blue);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.section-tag::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+  max-width: 80px;
+}
+h1 {
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #e8f0ff;
+  line-height: 1.15;
+  margin-bottom: 16px;
+}
+h2 {
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #dde8ff;
+  margin-bottom: 14px;
+  margin-top: 0;
+}
+h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 10px;
+  margin-top: 28px;
+}
+p {
+  color: var(--text);
+  margin-bottom: 14px;
+  max-width: 700px;
+}
+p:last-child { margin-bottom: 0; }
+strong { color: #e8efff; font-weight: 600; }
+em { color: var(--yellow); font-style: normal; }
+
+/* ── Lead text ───────────────────────────────────────────── */
+.lead {
+  font-size: 16.5px;
+  color: #9aadd4;
+  margin-bottom: 20px;
+  line-height: 1.7;
+}
+
+/* ── Callout boxes ───────────────────────────────────────── */
+.callout {
+  border-left: 3px solid var(--blue);
+  background: #0e1726;
+  border-radius: 0 8px 8px 0;
+  padding: 16px 20px;
+  margin: 20px 0;
+  max-width: 700px;
+}
+.callout.green { border-left-color: var(--green); background: #0a1a15; }
+.callout.red   { border-left-color: var(--red);   background: #1a0e0e; }
+.callout.yellow{ border-left-color: var(--yellow); background: #1a1408; }
+.callout-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--blue);
+  margin-bottom: 6px;
+}
+.callout.green .callout-title { color: var(--green); }
+.callout.red   .callout-title { color: var(--red); }
+.callout.yellow .callout-title { color: var(--yellow); }
+.callout p { color: #9aadd4; margin: 0; font-size: 14px; }
+
+/* ── Formula blocks ──────────────────────────────────────── */
+.formula-block {
+  background: #080c14;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px 24px;
+  margin: 20px 0;
+  max-width: 700px;
+  overflow-x: auto;
+}
+.formula {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: #b8d0ff;
+  line-height: 2;
+  white-space: pre;
+}
+.formula .comm  { color: var(--dim); }
+.formula .hi    { color: var(--yellow); }
+.formula .hi2   { color: var(--green); }
+.formula .hi3   { color: var(--blue); }
+
+/* ── Code blocks (highlight.js) ──────────────────────────── */
+pre {
+  margin: 18px 0;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  overflow-x: auto;
+  max-width: 100%;
+}
+pre code.hljs {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+  padding: 20px 24px;
+  border-radius: 10px;
+  background: #080c14 !important;
+}
+.code-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #0d1120;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 10px 10px 0 0;
+  padding: 8px 16px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.code-label + pre { border-radius: 0 0 10px 10px; margin-top: 0; }
+
+/* ── Interactive demo ────────────────────────────────────── */
+.demo-wrap {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+  margin: 20px 0;
+}
+.demo-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.demo-title {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+.slider-row label {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+.slider-row input[type=range] {
+  flex: 1;
+  accent-color: var(--blue);
+  cursor: pointer;
+}
+.slider-val {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text);
+  min-width: 3.5ch;
+  text-align: right;
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  image-rendering: pixelated;
+  background: #808080;
+}
+
+/* ── 4-method grid ───────────────────────────────────────── */
+.methods-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 16px;
+}
+.method-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.method-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.method-card-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.method-card-sub {
+  font-size: 11px;
+  color: var(--muted);
+  display: block;
+  margin-top: 1px;
+}
+.timing-badge {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  padding: 2px 8px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.timing-badge.ready { color: var(--green); border-color: #1a3a2a; background: #0a1a11; }
+
+/* ── Performance table ───────────────────────────────────── */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 20px 0;
+  font-size: 13.5px;
+}
+th {
+  text-align: left;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(255,255,255,0.02); }
+.td-method { font-weight: 600; color: #dde8ff; }
+.td-mono { font-family: var(--mono); font-size: 12px; }
+.speed-bar-wrap { display: flex; align-items: center; gap: 8px; }
+.speed-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--blue);
+  min-width: 3px;
+}
+.speed-bar.s-green  { background: var(--green); }
+.speed-bar.s-yellow { background: var(--yellow); }
+.speed-bar.s-red    { background: var(--red); }
+
+/* ── SVG diagram container ───────────────────────────────── */
+.diagram-wrap {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  margin: 20px 0;
+  flex-wrap: wrap;
+}
+.diagram-wrap svg {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #080c14;
+}
+.diagram-caption {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-top: 8px;
+  max-width: 300px;
+  line-height: 1.5;
+}
+
+/* ── Worked example widget ───────────────────────────────── */
+.example-widget {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  margin: 20px 0;
+}
+.example-inputs {
+  padding: 20px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+.input-group { display: flex; flex-direction: column; gap: 6px; }
+.input-group label {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.input-group input[type=range] { width: 140px; accent-color: var(--blue); }
+.input-group .inp-val {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+}
+.example-steps {
+  padding: 20px 24px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.step-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+.step-num {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 8px;
+}
+.step-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.step-row:last-child { border-bottom: none; }
+.step-key { color: var(--muted); }
+.step-val { color: var(--text); }
+.step-val.out { color: var(--red); font-weight: 700; }
+.step-val.ok  { color: var(--green); }
+.swatch-row {
+  display: flex;
+  gap: 12px;
+  padding: 16px 24px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.swatch-item { display: flex; flex-direction: column; gap: 6px; align-items: center; }
+.swatch {
+  width: 80px;
+  height: 56px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.swatch-label {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono);
+  text-align: center;
+  line-height: 1.3;
+}
+
+/* ── Inline tag ──────────────────────────────────────────── */
+.tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+.tag-fast   { background: #0f2a1a; color: var(--green); }
+.tag-slow   { background: #2a0f0f; color: var(--red); }
+.tag-med    { background: #1a1a08; color: var(--yellow); }
+.tag-css4   { background: #0f1e3a; color: var(--blue); }
+
+/* ── Binary search trace ─────────────────────────────────── */
+.bsearch-table {
+  font-family: var(--mono);
+  font-size: 12px;
+  width: 100%;
+  max-width: 560px;
+}
+.bsearch-table th { font-size: 10px; }
+.bsearch-table td { font-size: 12px; }
+.bsearch-table .in  { color: var(--green); }
+.bsearch-table .out { color: var(--red); }
+
+/* ── Divider ─────────────────────────────────────────────── */
+hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 40px 0;
+}
+
+/* ── Responsive ──────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  main { padding: 32px 24px 80px; }
+  .methods-grid { grid-template-columns: 1fr; }
+  .example-steps { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+
+<body>
+<div class="layout">
+
+<!-- ══════════════════ SIDEBAR ══════════════════ -->
+<nav class="sidebar" aria-label="Page sections">
+  <div class="sidebar-logo">OKLCH // Gamut</div>
+
+  <div class="toc-section">
+    <span class="toc-label">Getting Started</span>
+    <a class="toc-link" href="#intro">What Is Gamut Mapping?</a>
+    <a class="toc-link" href="#demo">Interactive Demo</a>
+    <a class="toc-link" href="#colorspace">OKLab &amp; OKLCH</a>
+  </div>
+
+  <div class="toc-section">
+    <span class="toc-label">Chroma Reduction</span>
+    <a class="toc-link" href="#how-it-works">How It Works</a>
+    <a class="toc-link" href="#math">The Math</a>
+    <a class="toc-link" href="#bsearch">Binary Search</a>
+    <a class="toc-link" href="#example">Worked Example</a>
+    <a class="toc-link" href="#code-cr">Code Deep Dive</a>
+  </div>
+
+  <div class="toc-section">
+    <span class="toc-label">All 4 Methods</span>
+    <a class="toc-link" href="#comparison">Side-by-Side</a>
+    <a class="toc-link" href="#performance">Performance</a>
+    <a class="toc-link" href="#code-clip">Clip Code</a>
+    <a class="toc-link" href="#code-css4">OKLCH+ΔEOK Code</a>
+    <a class="toc-link" href="#code-cjs">CIE LCH Code</a>
+  </div>
+</nav>
+
+<!-- ══════════════════ MAIN ══════════════════ -->
+<main>
+
+<!-- ────── INTRO ────── -->
+<section id="intro">
+  <div class="section-tag">Overview</div>
+  <h1>OKLCH Gamut Mapping</h1>
+  <p class="lead">
+    When computing colors mathematically in perceptually uniform color spaces, results routinely fall outside what any display can actually show. This page covers why that happens, how the <strong>Chroma Reduction</strong> method solves it elegantly, and how it compares against three alternatives.
+  </p>
+
+  <h3>What is a Display Gamut?</h3>
+  <p>
+    Every display technology — LCD, OLED, CRT — can only reproduce colors within a bounded region of all perceivable color. The most common target is <strong>sRGB</strong>, defined as a triangle in the CIE xy chromaticity diagram. Colors "inside the triangle" are displayable; everything else is <em>out-of-gamut</em>.
+  </p>
+  <p>
+    When you work in a perceptually uniform color space like OKLab or OKLCH and then try to convert a vibrant color to sRGB, you'll frequently get values like <code>R = 1.42, G = 0.61, B = −0.08</code>. Those values are mathematically valid in OKLab but physically impossible to render. You must bring them in-gamut before display.
+  </p>
+
+  <div class="callout red">
+    <div class="callout-title">The Naive Approach: RGB Clamping</div>
+    <p>The simplest fix is to just clamp: <code>R = min(1, max(0, R))</code>. But clamping <code>R = 1.42 → 1.0</code> and <code>B = −0.08 → 0.0</code> changes the <em>ratio between channels</em>. Ratios encode hue. The color you get is a different color — wrong lightness, wrong hue. You can see exactly this distortion in the "Clip" panel of the comparison grid below.</p>
+  </div>
+
+  <h3>A Better Strategy</h3>
+  <p>
+    The insight behind chroma reduction is this: OKLCH represents colors as a <strong>lightness L</strong>, a <strong>hue angle H</strong>, and a <strong>chroma C</strong> (distance from the neutral grey axis). For any given L and H, there is a maximum chroma C<sub>max</sub> that fits within sRGB. If a color exceeds that, we simply reduce C until it doesn't — preserving both lightness and hue throughout.
+  </p>
+</section>
+
+<!-- ────── DEMO ────── -->
+<section id="demo">
+  <div class="section-tag">Interactive</div>
+  <h2>Chroma Reduction — Live Demo</h2>
+  <p>
+    The canvas below shows a <strong>constant-lightness slice</strong> through OKLab space. Every pixel represents a unique (a, b) coordinate, and its color is the result of applying chroma reduction to map it into sRGB. The white central region is already in-gamut at full saturation. The desaturated band just outside is where chroma has been clamped to the sRGB boundary. Move the slider to change lightness.
+  </p>
+
+  <div class="demo-wrap">
+    <div class="slider-row">
+      <label>Lightness L</label>
+      <input id="sl-single" type="range" min="0" max="1" step="0.005" value="0.5">
+      <span class="slider-val" id="sv-single">0.500</span>
+    </div>
+    <canvas id="c-single" width="400" height="400"></canvas>
+    <p style="margin-top:12px; font-size:13px; color:var(--muted);">
+      Horizontal axis → <strong style="color:var(--text)">b</strong> (blue left, yellow right) &nbsp;·&nbsp;
+      Vertical axis → <strong style="color:var(--text)">a</strong> (green top, red bottom)
+    </p>
+  </div>
+</section>
+
+<!-- ────── COLORSPACE ────── -->
+<section id="colorspace">
+  <div class="section-tag">Foundations</div>
+  <h2>OKLab &amp; OKLCH</h2>
+  <p>
+    <strong>OKLab</strong> (Björn Ottosson, 2020) is a perceptually uniform color space with three axes:
+  </p>
+  <ul style="color:var(--text);padding-left:20px;margin-bottom:14px;line-height:2">
+    <li><strong>L</strong> — lightness, from 0 (black) to 1 (white)</li>
+    <li><strong>a</strong> — green (negative) to red (positive)</li>
+    <li><strong>b</strong> — blue (negative) to yellow (positive)</li>
+  </ul>
+  <p>
+    "Perceptually uniform" means equal Euclidean distances in (L, a, b) correspond to equal perceived color differences. This is why OKLab is far better than RGB or even HSL for color manipulation — operations like blending, darkening, and saturation adjustments produce <em>predictably correct</em> results.
+  </p>
+
+  <div class="diagram-wrap">
+    <!-- SVG: ab plane diagram -->
+    <div>
+      <svg width="280" height="280" viewBox="0 0 280 280" xmlns="http://www.w3.org/2000/svg">
+        <!-- grid -->
+        <line x1="20" y1="140" x2="260" y2="140" stroke="#1d2840" stroke-width="1"/>
+        <line x1="140" y1="20" x2="140" y2="260" stroke="#1d2840" stroke-width="1"/>
+        <!-- axes -->
+        <line x1="20" y1="140" x2="256" y2="140" stroke="#243050" stroke-width="1.5" marker-end="url(#arr)"/>
+        <line x1="140" y1="260" x2="140" y2="24" stroke="#243050" stroke-width="1.5" marker-end="url(#arr)"/>
+        <defs>
+          <marker id="arr" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+            <path d="M0,0 L6,3 L0,6 Z" fill="#3d4f72"/>
+          </marker>
+        </defs>
+        <!-- chroma circle (representing gamut boundary at this L) -->
+        <circle cx="140" cy="140" r="80" fill="none" stroke="#1d3a60" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <!-- hue angle arc -->
+        <path d="M 140 140 L 173 140 A 33 33 0 0 0 156.3 113.7" fill="none" stroke="#f5a623" stroke-width="1.3"/>
+        <!-- chroma line -->
+        <line x1="140" y1="140" x2="206" y2="88" stroke="#4f8ef7" stroke-width="1.8"/>
+        <!-- sample point -->
+        <circle cx="206" cy="88" r="5" fill="#4f8ef7" stroke="#080c14" stroke-width="2"/>
+        <!-- labels -->
+        <text x="262" y="144" font-size="12" fill="#6878a0" font-family="monospace">a</text>
+        <text x="144" y="20" font-size="12" fill="#6878a0" font-family="monospace">b</text>
+        <text x="8" y="144" font-size="10" fill="#3d4f72" font-family="monospace">−a</text>
+        <text x="140" y="272" font-size="10" fill="#3d4f72" font-family="monospace" text-anchor="middle">−b</text>
+        <!-- H label -->
+        <text x="178" y="130" font-size="11" fill="#f5a623" font-family="monospace">H</text>
+        <!-- C label -->
+        <text x="166" y="106" font-size="11" fill="#4f8ef7" font-family="monospace">C</text>
+        <!-- sample point coord label -->
+        <text x="212" y="82" font-size="10" fill="#9aadd4" font-family="monospace">(a,b)</text>
+        <!-- green label left -->
+        <text x="24" y="138" font-size="10" fill="#3ecf8e" font-family="monospace" transform="rotate(-90,24,138)" text-anchor="middle">green</text>
+        <!-- red label right -->
+        <text x="246" y="155" font-size="10" fill="#f06464" font-family="monospace">red</text>
+        <!-- yellow top -->
+        <text x="102" y="32" font-size="10" fill="#f5a623" font-family="monospace">yellow</text>
+        <!-- blue bottom -->
+        <text x="114" y="265" font-size="10" fill="#6878f0" font-family="monospace">blue</text>
+        <!-- origin dot -->
+        <circle cx="140" cy="140" r="2.5" fill="#6878a0"/>
+        <text x="145" y="155" font-size="10" fill="#6878a0" font-family="monospace">0,0</text>
+      </svg>
+      <p class="diagram-caption">The OKLab <strong>ab-plane</strong> at a fixed lightness L. Chroma C is the radial distance from the origin; hue H is the angle. The dashed circle represents a constant-chroma contour.</p>
+    </div>
+
+    <!-- SVG: L-C gamut boundary diagram -->
+    <div>
+      <svg width="280" height="280" viewBox="0 0 280 280" xmlns="http://www.w3.org/2000/svg">
+        <!-- gamut boundary fill -->
+        <path d="M 50,260 C 50,230 120,200 160,140 C 190,95 160,50 50,20 Z" fill="#0a1a2a" opacity="0.8"/>
+        <!-- gamut boundary curve -->
+        <path d="M 50,260 C 50,230 120,200 160,140 C 190,95 160,50 50,20" fill="none" stroke="#4f8ef7" stroke-width="2"/>
+        <!-- axes -->
+        <line x1="50" y1="260" x2="50" y2="18" stroke="#243050" stroke-width="1.5" marker-end="url(#arrv)"/>
+        <line x1="50" y1="260" x2="268" y2="260" stroke="#243050" stroke-width="1.5" marker-end="url(#arrv)"/>
+        <defs>
+          <marker id="arrv" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+            <path d="M0,0 L6,3 L0,6 Z" fill="#3d4f72"/>
+          </marker>
+        </defs>
+        <!-- out-of-gamut point -->
+        <circle cx="220" cy="120" r="5" fill="#f06464" stroke="#080c14" stroke-width="2"/>
+        <!-- mapped point on boundary (same L) -->
+        <circle cx="152" cy="120" r="5" fill="#3ecf8e" stroke="#080c14" stroke-width="2"/>
+        <!-- horizontal arrow (constant L, reducing C) -->
+        <line x1="214" y1="120" x2="161" y2="120" stroke="#f5a623" stroke-width="1.5" stroke-dasharray="3 2" marker-end="url(#arryellow)"/>
+        <defs>
+          <marker id="arryellow" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+            <path d="M0,0 L6,3 L0,6 Z" fill="#f5a623"/>
+          </marker>
+        </defs>
+        <!-- L constant horizontal guide line -->
+        <line x1="50" y1="120" x2="235" y2="120" stroke="#1d2840" stroke-width="1" stroke-dasharray="2 4"/>
+        <!-- axis labels -->
+        <text x="54" y="16" font-size="12" fill="#6878a0" font-family="monospace">L</text>
+        <text x="262" y="264" font-size="12" fill="#6878a0" font-family="monospace">C</text>
+        <!-- tick labels -->
+        <text x="36" y="264" font-size="10" fill="#3d4f72" font-family="monospace">0</text>
+        <text x="36" y="22" font-size="10" fill="#3d4f72" font-family="monospace">1</text>
+        <!-- L constant label -->
+        <text x="24" y="124" font-size="10" fill="#f5a623" font-family="monospace" text-anchor="end">L</text>
+        <!-- point labels -->
+        <text x="222" y="113" font-size="10" fill="#f06464" font-family="monospace">C_orig</text>
+        <text x="126" y="113" font-size="10" fill="#3ecf8e" font-family="monospace">C_max</text>
+        <!-- gamut label -->
+        <text x="68" y="160" font-size="11" fill="#4f8ef7" font-family="monospace" opacity="0.8">sRGB</text>
+        <text x="68" y="174" font-size="11" fill="#4f8ef7" font-family="monospace" opacity="0.8">gamut</text>
+        <!-- reduce label -->
+        <text x="172" y="114" font-size="10" fill="#f5a623" font-family="monospace">reduce</text>
+      </svg>
+      <p class="diagram-caption">Cross-section of the sRGB gamut at a <strong>fixed hue H</strong>. The blue curve is the gamut boundary C_max(L). An out-of-gamut point (red) is mapped horizontally to the boundary (green), preserving L.</p>
+    </div>
+  </div>
+
+  <h3>From OKLab to OKLCH</h3>
+  <p>
+    OKLCH is simply OKLab expressed in <strong>polar coordinates</strong> around the lightness axis. Given (L, a, b):
+  </p>
+  <div class="formula-block">
+    <div class="formula"><span class="hi">C</span> = √(a² + b²)          <span class="comm">// chroma: distance from neutral axis</span>
+<span class="hi">H</span> = atan2(b, a) × (180/π)  <span class="comm">// hue: angle in degrees [0, 360)</span></div>
+  </div>
+  <p>
+    This decomposition is key: because C and H are independent, we can manipulate them separately. Reducing C while holding L and H constant means moving <em>radially inward</em> along the same hue ray — the color gets less saturated but doesn't shift in hue or lightness.
+  </p>
+</section>
+
+<!-- ────── HOW IT WORKS ────── -->
+<section id="how-it-works">
+  <div class="section-tag">Algorithm</div>
+  <h2>How Chroma Reduction Works</h2>
+  <p>
+    The algorithm rests on a single geometric fact: for any fixed lightness L and hue H, the set of in-gamut chromas forms a contiguous interval <code>[0, C_max(L, H)]</code>. There are no "holes" — if C = 0.15 and C = 0.25 are both in-gamut, every value between them is too.
+  </p>
+  <p>
+    This means we can binary-search for C_max, and then map any out-of-gamut color to its boundary equivalent in one clean operation:
+  </p>
+  <div class="formula-block">
+    <div class="formula"><span class="comm">// The complete gamut mapping pipeline</span>
+
+<span class="comm">① Test if already in gamut</span>
+   linear_rgb = oklabToLinearSRGB(L, a, b)
+   if all(0 ≤ r,g,b ≤ 1):
+       return applyGamma(linear_rgb)   <span class="comm">// fast path, no search needed</span>
+
+<span class="comm">② Extract chroma and hue</span>
+   C = √(a² + b²)
+   H = atan2(b, a) · (180/π)
+
+<span class="comm">③ Binary search for maximum in-gamut chroma</span>
+   C_max = maxChroma(L, H)
+
+<span class="comm">④ Clamp chroma and convert</span>
+   return oklchToSRGB(L, min(C, C_max), H)</div>
+  </div>
+
+  <div class="callout green">
+    <div class="callout-title">Why This Preserves Hue</div>
+    <p>The hue angle H is never touched. We only modify C. In the ab-plane, this means we're moving <em>straight toward the origin</em> along the same ray. The direction of that ray is what defines hue — so hue is perfectly preserved by construction.</p>
+  </div>
+
+  <div class="callout yellow">
+    <div class="callout-title">The Fast Path</div>
+    <p>Most colors in a typical image <em>are</em> already in gamut. The algorithm checks this first, using a single matrix multiplication. If in-gamut, it returns immediately — no binary search needed. This makes the common case very fast.</p>
+  </div>
+</section>
+
+<!-- ────── MATH ────── -->
+<section id="math">
+  <div class="section-tag">Mathematics</div>
+  <h2>The Conversion Math</h2>
+
+  <h3>OKLab → Linear sRGB</h3>
+  <p>
+    The conversion from OKLab to linear (pre-gamma) sRGB involves two steps. First, reconstruct intermediate values l', m', s' (representing LMS cone responses in a modified space):
+  </p>
+  <div class="formula-block">
+    <div class="formula"><span class="hi">l'</span> = L + <span class="hi2">0.3963377774</span>·a + <span class="hi2">0.2158037573</span>·b
+<span class="hi">m'</span> = L − <span class="hi2">0.1055613458</span>·a − <span class="hi2">0.0638541728</span>·b
+<span class="hi">s'</span> = L − <span class="hi2">0.0894841775</span>·a − <span class="hi2">1.2914855480</span>·b
+
+<span class="hi">l</span> = l'³      <span class="hi">m</span> = m'³      <span class="hi">s</span> = s'³   <span class="comm">// cube — undoes the cube-root in OKLab's definition</span></div>
+  </div>
+  <p>
+    The cube-root step is central to OKLab's design — it's what gives the space its perceptual uniformity. The cube root compresses large values and expands small ones, mimicking how human vision responds to light intensity. The cube here undoes it, restoring physical LMS values.
+  </p>
+  <p>
+    Then apply the LMS → linear sRGB matrix (derived from the sRGB primaries via D65 white point):
+  </p>
+  <div class="formula-block">
+    <div class="formula"><span class="hi3">R_lin</span> =  <span class="hi2">4.0767416621</span>·l − <span class="hi2">3.3077115913</span>·m + <span class="hi2">0.2309699292</span>·s
+<span class="hi3">G_lin</span> = −<span class="hi2">1.2684380046</span>·l + <span class="hi2">2.6097574011</span>·m − <span class="hi2">0.3413193965</span>·s
+<span class="hi3">B_lin</span> = −<span class="hi2">0.0041960863</span>·l − <span class="hi2">0.7034186147</span>·m + <span class="hi2">1.7076147010</span>·s</div>
+  </div>
+
+  <h3>In-Gamut Test</h3>
+  <p>
+    The sRGB gamut in <em>linear</em> space is simply the unit cube — each channel must be in [0, 1]. We check this before doing any search:
+  </p>
+  <div class="formula-block">
+    <div class="formula">inSRGB(R, G, B) = (R ≥ 0) ∧ (R ≤ 1) ∧ (G ≥ 0) ∧ (G ≤ 1) ∧ (B ≥ 0) ∧ (B ≤ 1)</div>
+  </div>
+
+  <h3>Gamma Correction</h3>
+  <p>
+    Once we have linear sRGB values in [0, 1], we apply the standard sRGB transfer function (gamma) to get display-ready values:
+  </p>
+  <div class="formula-block">
+    <div class="formula"><span class="hi">f</span>(c) = <span class="comm">// IEC 61966-2-1 sRGB gamma</span>
+  if c ≤ 0.0031308:   12.92 · c             <span class="comm">// linear segment (shadow region)</span>
+  else:               1.055 · c^(1/2.4) − 0.055  <span class="comm">// power curve</span></div>
+  </div>
+  <p>
+    This piecewise function is applied to R, G, and B independently. The linear segment at the bottom avoids a kink at zero (a pure power curve would have an infinite slope at 0).
+  </p>
+</section>
+
+<!-- ────── BINARY SEARCH ────── -->
+<section id="bsearch">
+  <div class="section-tag">Algorithm Detail</div>
+  <h2>Binary Search for C<sub>max</sub></h2>
+  <p>
+    The function <code>maxChroma(L, H)</code> finds the largest C for which <code>oklchToLinearSRGB(L, C, H)</code> produces all channels in [0, 1]. It works in two phases.
+  </p>
+
+  <h3>Phase 1: Find an Upper Bound</h3>
+  <p>
+    We don't know how large C_max is, so we start at <code>hi = 0.01</code> and <strong>double it</strong> until we go out of gamut (or reach 0.5, which is well beyond any sRGB-reachable chroma). This geometric search finds a bracket in O(log C_max) steps — usually 3–6 doublings.
+  </p>
+  <div class="formula-block">
+    <div class="formula">hi = 0.01
+while hi &lt; 0.5 and inSRGB(oklchToLinearSRGB(L, hi, H)):
+    hi = hi × 2       <span class="comm">// bracket doubles until out of gamut</span>
+<span class="comm">// Now: lo = 0 (safe), hi = first out-of-gamut value found</span></div>
+  </div>
+
+  <h3>Phase 2: Binary Search</h3>
+  <p>
+    With a bracket <code>[lo, hi]</code> where lo is in-gamut and hi is out-of-gamut, we binary-search for 25 iterations. Each iteration halves the interval. After 25 steps from an initial bracket of ~0.5, we have precision of 0.5 / 2²⁵ ≈ <strong>1.5 × 10⁻⁸</strong> — far beyond any practical need.
+  </p>
+
+  <table class="bsearch-table">
+    <thead>
+      <tr><th>Iter</th><th>lo</th><th>hi</th><th>mid</th><th>Result</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>1</td><td class="td-mono">0.0000</td><td class="td-mono">0.2000</td><td class="td-mono">0.1000</td><td class="in">in gamut → lo = 0.1000</td></tr>
+      <tr><td>2</td><td class="td-mono">0.1000</td><td class="td-mono">0.2000</td><td class="td-mono">0.1500</td><td class="in">in gamut → lo = 0.1500</td></tr>
+      <tr><td>3</td><td class="td-mono">0.1500</td><td class="td-mono">0.2000</td><td class="td-mono">0.1750</td><td class="out">out of gamut → hi = 0.1750</td></tr>
+      <tr><td>4</td><td class="td-mono">0.1500</td><td class="td-mono">0.1750</td><td class="td-mono">0.1625</td><td class="in">in gamut → lo = 0.1625</td></tr>
+      <tr><td>5</td><td class="td-mono">0.1625</td><td class="td-mono">0.1750</td><td class="td-mono">0.1688</td><td class="out">out of gamut → hi = 0.1688</td></tr>
+      <tr><td colspan="5" style="color:var(--dim);font-size:11px;padding:8px 14px">… converges after 25 iterations to ~10⁻⁸ precision</td></tr>
+      <tr><td>25</td><td class="td-mono">0.1651</td><td class="td-mono">0.1651</td><td class="td-mono">—</td><td class="in">C_max ≈ 0.1651</td></tr>
+    </tbody>
+  </table>
+  <p style="font-size:13px;color:var(--muted);margin-top:10px">Example trace for L = 0.65, H = 24° (a vivid orange). Numbers shown for illustration; actual output depends on float arithmetic.</p>
+</section>
+
+<!-- ────── WORKED EXAMPLE ────── -->
+<section id="example">
+  <div class="section-tag">Worked Example</div>
+  <h2>Step-by-Step: An Out-of-Gamut Color</h2>
+  <p>
+    Drag the sliders to any OKLCH color and see each stage of the conversion pipeline computed live. The example below is pre-set to a vivid orange that lies outside sRGB.
+  </p>
+
+  <div class="example-widget">
+    <div class="example-inputs">
+      <div class="input-group">
+        <label>Lightness L</label>
+        <input id="ex-L" type="range" min="0.01" max="0.99" step="0.01" value="0.65">
+        <span class="inp-val" id="ex-L-val">0.65</span>
+      </div>
+      <div class="input-group">
+        <label>Chroma C</label>
+        <input id="ex-C" type="range" min="0" max="0.37" step="0.005" value="0.27">
+        <span class="inp-val" id="ex-C-val">0.270</span>
+      </div>
+      <div class="input-group">
+        <label>Hue H (°)</label>
+        <input id="ex-H" type="range" min="0" max="360" step="1" value="32">
+        <span class="inp-val" id="ex-H-val">32°</span>
+      </div>
+    </div>
+
+    <div class="example-steps">
+      <div class="step-box">
+        <div class="step-num">Step 1 — OKLCH → OKLab</div>
+        <div class="step-row"><span class="step-key">a = C·cos(H)</span><span class="step-val" id="ex-a">—</span></div>
+        <div class="step-row"><span class="step-key">b = C·sin(H)</span><span class="step-val" id="ex-b">—</span></div>
+      </div>
+
+      <div class="step-box">
+        <div class="step-num">Step 2 — OKLab → Linear sRGB</div>
+        <div class="step-row"><span class="step-key">R_lin</span><span class="step-val" id="ex-R">—</span></div>
+        <div class="step-row"><span class="step-key">G_lin</span><span class="step-val" id="ex-G">—</span></div>
+        <div class="step-row"><span class="step-key">B_lin</span><span class="step-val" id="ex-B">—</span></div>
+      </div>
+
+      <div class="step-box">
+        <div class="step-num">Step 3 — Gamut Check</div>
+        <div class="step-row"><span class="step-key">Status</span><span class="step-val" id="ex-gamut">—</span></div>
+        <div class="step-row"><span class="step-key">C_max at (L, H)</span><span class="step-val" id="ex-cmax">—</span></div>
+        <div class="step-row"><span class="step-key">Reduction needed</span><span class="step-val" id="ex-reduction">—</span></div>
+      </div>
+
+      <div class="step-box">
+        <div class="step-num">Step 4 — Mapped sRGB (gamma)</div>
+        <div class="step-row"><span class="step-key">R</span><span class="step-val" id="ex-Rf">—</span></div>
+        <div class="step-row"><span class="step-key">G</span><span class="step-val" id="ex-Gf">—</span></div>
+        <div class="step-row"><span class="step-key">B</span><span class="step-val" id="ex-Bf">—</span></div>
+      </div>
+    </div>
+
+    <div class="swatch-row">
+      <div class="swatch-item">
+        <canvas class="swatch" id="ex-sw-clip"></canvas>
+        <span class="swatch-label">Clipped<br>(wrong hue)</span>
+      </div>
+      <div class="swatch-item">
+        <canvas class="swatch" id="ex-sw-mapped"></canvas>
+        <span class="swatch-label">Chroma Reduced<br>(correct hue)</span>
+      </div>
+      <div style="flex:1;min-width:200px">
+        <p id="ex-note" style="font-size:13px;color:var(--muted);margin:0"></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ────── CODE DEEP DIVE ────── -->
+<section id="code-cr">
+  <div class="section-tag">Code</div>
+  <h2>Chroma Reduction — Annotated Code</h2>
+  <p>
+    The entire chroma reduction method is implemented in pure JavaScript with no dependencies. Here are all six functions explained in order.
+  </p>
+
+  <h3>1. Gamma Correction</h3>
+  <p>Converts a single linear-light channel to sRGB display encoding.</p>
+  <div class="code-label">
+    <span>linearToGamma(c)</span>
+    <span>pure math · no alloc</span>
+  </div>
+<pre><code class="language-javascript">function linearToGamma(c) {
+  // IEC 61966-2-1 sRGB transfer function.
+  // Linear segment below the threshold prevents
+  // an infinite derivative at c = 0.
+  return c <= 0.0031308
+    ? 12.92 * c                         // linear region
+    : 1.055 * Math.pow(c, 1 / 2.4) - 0.055; // gamma curve
+}
+</code></pre>
+
+  <h3>2. OKLab → Linear sRGB</h3>
+  <p>The core conversion. Two matrix multiplications with a cube-root inversion between them.</p>
+  <div class="code-label">
+    <span>oklabToLinearSRGB(L, a, b)</span>
+    <span>27 multiplications · returns [R, G, B]</span>
+  </div>
+<pre><code class="language-javascript">function oklabToLinearSRGB(L, a, b) {
+  // Stage 1: multiply by the OKLab→LMS matrix.
+  // These coefficients encode how the (L, a, b) axes
+  // project onto each cone-response channel.
+  const l_ = L + 0.3963377774 * a + 0.2158037573 * b;
+  const m_ = L - 0.1055613458 * a - 0.0638541728 * b;
+  const s_ = L - 0.0894841775 * a - 1.2914855480 * b;
+
+  // Stage 2: undo OKLab's cube-root compression.
+  // OKLab stores l^(1/3), m^(1/3), s^(1/3) — cube
+  // these back to recover linear LMS cone responses.
+  const l = l_ ** 3;
+  const m = m_ ** 3;
+  const s = s_ ** 3;
+
+  // Stage 3: multiply by the LMS→linear sRGB matrix.
+  // These coefficients come from the sRGB primaries
+  // under D65 illuminant.
+  return [
+     4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,  // R
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,  // G
+    -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s,  // B
+  ];
+}
+</code></pre>
+
+  <h3>3. In-Gamut Test</h3>
+  <p>A simple unit-cube check. Must be done in linear (pre-gamma) space because that's where sRGB's gamut boundaries are straight planes.</p>
+<pre><code class="language-javascript">function inSRGBLinear(rgb) {
+  // sRGB gamut = unit cube [0,1]³ in linear space.
+  // A value of 1.001 is just as out-of-gamut as 2.0 —
+  // both are impossible to display.
+  return rgb.every(v => v >= 0 && v <= 1);
+}
+</code></pre>
+
+  <h3>4. OKLCH → Linear sRGB</h3>
+  <p>Used exclusively inside the binary search. Converts a chroma value at a given hue back to (a, b), then to linear RGB.</p>
+<pre><code class="language-javascript">function oklchToLinearSRGB(L, C, H) {
+  // Convert polar (C, H) → Cartesian (a, b).
+  // H is in degrees; convert to radians first.
+  const h = H * Math.PI / 180;
+  const a = C * Math.cos(h);
+  const b = C * Math.sin(h);
+  return oklabToLinearSRGB(L, a, b);
+}
+</code></pre>
+
+  <h3>5. Maximum Chroma Search</h3>
+  <p>The heart of the algorithm. Finds the gamut boundary at a given lightness and hue via exponential expansion followed by binary search.</p>
+  <div class="code-label">
+    <span>maxChroma(L, H)</span>
+    <span>~6 bracket iters + 25 binary search iters · returns float</span>
+  </div>
+<pre><code class="language-javascript">function maxChroma(L, H) {
+  // Phase 1: Exponential search to bracket C_max.
+  // Start tiny (0.01) and double until out of gamut.
+  // This finds an upper bound in O(log C_max) steps
+  // without needing to know C_max ahead of time.
+  let lo = 0, hi = 0.01;
+  while (hi < 0.5 && inSRGBLinear(oklchToLinearSRGB(L, hi, H))) {
+    hi *= 2;
+  }
+  // Invariant: lo is in-gamut, hi is out-of-gamut.
+
+  // Phase 2: Binary search within [lo, hi].
+  // 25 iterations → precision ~= (hi - lo) / 2^25 ≈ 1.5e-8.
+  // That's way beyond floating-point noise in color values.
+  for (let i = 0; i < 25; i++) {
+    const mid = (lo + hi) / 2;
+    if (inSRGBLinear(oklchToLinearSRGB(L, mid, H))) {
+      lo = mid;  // mid is in-gamut → raise lower bound
+    } else {
+      hi = mid;  // mid is out-of-gamut → lower upper bound
+    }
+  }
+
+  // lo ≈ hi ≈ C_max after 25 iterations.
+  // Return lo (the last known in-gamut chroma).
+  return lo;
+}
+</code></pre>
+
+  <h3>6. The Main Map Function</h3>
+  <p>Combines everything. Note the fast path: colors already in gamut skip all the search logic entirely.</p>
+<pre><code class="language-javascript">function pickerMap(L, a, b) {
+  // Edge cases: L = 0 and L = 1 are pure black/white.
+  // No conversion needed — they map to {0,0,0}/{1,1,1}.
+  if (L <= 0) return [0, 0, 0];
+  if (L >= 1) return [1, 1, 1];
+
+  // Fast path: check if already in sRGB gamut.
+  // Most colors in typical usage will be in-gamut,
+  // so this path is taken frequently.
+  const rgb = oklabToLinearSRGB(L, a, b);
+  if (inSRGBLinear(rgb)) {
+    return rgb.map(linearToGamma);  // just apply gamma, done
+  }
+
+  // Slow path: the color is out of gamut.
+  // Extract chroma and hue from (a, b).
+  const C = Math.sqrt(a * a + b * b);
+  let H = Math.atan2(b, a) * 180 / Math.PI;
+  if (H < 0) H += 360;  // normalize to [0, 360)
+
+  // Binary-search for the maximum in-gamut chroma
+  // at this lightness and hue, then clamp to it.
+  const C_mapped = Math.min(C, maxChroma(L, H));
+  return oklchToLinearSRGB(L, C_mapped, H).map(linearToGamma);
+}
+</code></pre>
+</section>
+
+<!-- ────── COMPARISON ────── -->
+<section id="comparison">
+  <div class="section-tag">4-Method Comparison</div>
+  <h2>All Four Methods, Side by Side</h2>
+  <p>
+    Each canvas below shows the same OKLab constant-lightness slice, mapped to sRGB by a different algorithm. Move the slider to change L and observe how the gamut boundary and color distribution shift under each method.
+  </p>
+  <p>
+    Focus particularly on the <strong>transition zone</strong> — the region just outside the in-gamut area. The Clip panel shows abrupt hue shifts; the three chroma-aware methods produce smooth gradients at the boundary.
+  </p>
+
+  <div class="demo-wrap">
+    <div class="slider-row">
+      <label>Lightness L</label>
+      <input id="sl-compare" type="range" min="0" max="1" step="0.005" value="0.5">
+      <span class="slider-val" id="sv-compare">0.500</span>
+    </div>
+
+    <div class="methods-grid">
+      <div class="method-card">
+        <div class="method-card-header">
+          <div>
+            <div class="method-card-name">Chroma Reduction <span class="tag tag-fast">fast</span></div>
+            <span class="method-card-sub">Binary search · vanilla JS · no deps</span>
+          </div>
+          <span class="timing-badge" id="t-cmp-picker">—</span>
+        </div>
+        <canvas id="c-cmp-picker" width="400" height="400"></canvas>
+      </div>
+
+      <div class="method-card">
+        <div class="method-card-header">
+          <div>
+            <div class="method-card-name">OKLCH + ΔEOK <span class="tag tag-css4">CSS4</span></div>
+            <span class="method-card-sub">CSS Color 4 GMA · color.js · JND check</span>
+          </div>
+          <span class="timing-badge" id="t-cmp-ok">—</span>
+        </div>
+        <canvas id="c-cmp-ok" width="400" height="400"></canvas>
+      </div>
+
+      <div class="method-card">
+        <div class="method-card-header">
+          <div>
+            <div class="method-card-name">Clip <span class="tag tag-fast">fastest</span></div>
+            <span class="method-card-sub">RGB coordinate clamp · O(1) per color</span>
+          </div>
+          <span class="timing-badge" id="t-cmp-clip">—</span>
+        </div>
+        <canvas id="c-cmp-clip" width="400" height="400"></canvas>
+      </div>
+
+      <div class="method-card">
+        <div class="method-card-header">
+          <div>
+            <div class="method-card-name">CIE LCH + ΔE2000 <span class="tag tag-slow">slow</span></div>
+            <span class="method-card-sub">color.js GMA · complex ΔE formula</span>
+          </div>
+          <span class="timing-badge" id="t-cmp-cjs">—</span>
+        </div>
+        <canvas id="c-cmp-cjs" width="400" height="400"></canvas>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ────── PERFORMANCE ────── -->
+<section id="performance">
+  <div class="section-tag">Performance</div>
+  <h2>Why the Speed Difference?</h2>
+  <p>
+    Timing from the canvas above (50×50 = 2,500 cells per render) reveals dramatic differences between methods. Here's why each one costs what it does.
+  </p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Method</th>
+        <th>~Per Color</th>
+        <th>50×50 Grid</th>
+        <th>Relative Cost</th>
+        <th>Hue-Preserving?</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="td-method">Clip</td>
+        <td class="td-mono">~4 µs</td>
+        <td class="td-mono">~10 ms</td>
+        <td>
+          <div class="speed-bar-wrap">
+            <div class="speed-bar s-green" style="width:8px"></div>
+            <span style="font-size:12px;color:var(--green)">1×</span>
+          </div>
+        </td>
+        <td style="color:var(--red)">✗ No</td>
+      </tr>
+      <tr>
+        <td class="td-method">Chroma Reduction</td>
+        <td class="td-mono">~20–40 µs</td>
+        <td class="td-mono">~50–100 ms</td>
+        <td>
+          <div class="speed-bar-wrap">
+            <div class="speed-bar s-green" style="width:40px"></div>
+            <span style="font-size:12px;color:var(--green)">10×</span>
+          </div>
+        </td>
+        <td style="color:var(--green)">✓ Yes</td>
+      </tr>
+      <tr>
+        <td class="td-method">OKLCH + ΔEOK</td>
+        <td class="td-mono">~75 µs</td>
+        <td class="td-mono">~150–200 ms</td>
+        <td>
+          <div class="speed-bar-wrap">
+            <div class="speed-bar s-yellow" style="width:80px"></div>
+            <span style="font-size:12px;color:var(--yellow)">20×</span>
+          </div>
+        </td>
+        <td style="color:var(--green)">✓ Yes</td>
+      </tr>
+      <tr>
+        <td class="td-method">CIE LCH + ΔE2000</td>
+        <td class="td-mono">~230 µs</td>
+        <td class="td-mono">~500–600 ms</td>
+        <td>
+          <div class="speed-bar-wrap">
+            <div class="speed-bar s-red" style="width:160px"></div>
+            <span style="font-size:12px;color:var(--red)">57×</span>
+          </div>
+        </td>
+        <td style="color:var(--green)">✓ Yes</td>
+      </tr>
+    </tbody>
+  </table>
+  <p style="font-size:13px;color:var(--muted);margin-top:6px">Timing reference: OKLab Explorer benchmark. Actual values vary by device. Chroma Reduction uses vanilla JS; others use color.js with object allocation overhead.</p>
+
+  <h3>Clip (~4 µs)</h3>
+  <p>
+    The absolute minimum: one matrix multiplication (OKLab → sRGB), then three <code>Math.max / Math.min</code> calls. Zero branching, zero allocation. It's fast precisely because it doesn't think — it just truncates. The price is visual correctness.
+  </p>
+
+  <h3>Chroma Reduction (~20–40 µs)</h3>
+  <p>
+    Pure arithmetic in hot, allocation-free loops. The binary search runs ~30 iterations total (≈5 bracket doublings + 25 bisections), each performing a single <code>oklabToLinearSRGB</code> call — 27 multiplications and 9 additions. No objects are created, no garbage is collected. V8 can JIT this aggressively. Colors already in gamut hit the fast path and cost only one <code>oklabToLinearSRGB</code> + 3 comparisons.
+  </p>
+
+  <h3>OKLCH + ΔEOK (~75 µs)</h3>
+  <p>
+    Structurally similar to Chroma Reduction, but routed through <strong>color.js</strong> — a full-featured library that represents colors as JavaScript objects. Every <code>to()</code> call, every <code>clone()</code>, every <code>inGamut()</code> creates new objects and walks prototype chains. There's also an additional <strong>ΔE<sub>OK</sub> check</strong>: before the binary search, it checks whether clipping would produce a perceptually close result (within the JND threshold of 0.02), and if so, skips the search. This is a useful quality-of-life optimization but adds overhead on the common path.
+  </p>
+
+  <h3>CIE LCH + ΔE2000 (~230 µs)</h3>
+  <p>
+    The most expensive method for two reasons. First, it operates in <strong>CIE LCH</strong> (older, less perceptually uniform than OKLCH), which requires an intermediate conversion through CIE XYZ and CIE Lab — more matrix multiplications and a more complex cube-root function. Second, <strong>ΔE2000</strong> is an extremely involved formula: it includes hue rotation corrections, chroma weighting factors, and trigonometric compensation terms designed to fix known perceptual non-uniformities in CIE Lab. Computing ΔE2000 takes roughly 60–80 floating-point operations per call, and it's called at every binary search iteration. That's the dominant cost.
+  </p>
+</section>
+
+<!-- ────── CLIP CODE ────── -->
+<section id="code-clip">
+  <div class="section-tag">Code · Method 2</div>
+  <h2>Clip — Channel Clamping</h2>
+  <p>
+    The simplest method: convert to sRGB (via color.js for consistency with the other library methods), then clamp each channel to its valid range.
+  </p>
+<pre><code class="language-javascript">function clip(color, destination) {
+  // Convert from OKLab to the destination space (sRGB).
+  // This may produce channel values outside [0, 1].
+  let destColor = to(color, destination);
+
+  // Get the valid range for each channel in the destination space.
+  // For sRGB: R ∈ [0, 1], G ∈ [0, 1], B ∈ [0, 1].
+  const destSpace = Color.Space.get(destination);
+  const bounds = Object.values(destSpace.coords).map(c => c.range || []);
+
+  // Clamp each channel independently.
+  // This is the source of hue distortion: R, G, B encode
+  // color as a combination of primaries. Clamping R=1.4 to 1.0
+  // while leaving G=0.5 unchanged alters their ratio, which
+  // shifts the perceived hue of the result.
+  destColor.coords = destColor.coords.map((c, i) => {
+    const [min, max] = bounds[i];
+    if (min !== undefined) c = Math.max(min, c);
+    if (max !== undefined) c = Math.min(c, max);
+    return c;
+  });
+
+  return destColor;
+}
+
+// Example: oklch(0.65, 0.27, 32°) → clip
+// R_lin = 1.12  → clamped to 1.0  (lost 0.12)
+// G_lin = 0.06  → unchanged
+// B_lin = 0.04  → unchanged
+// The lost R shifts the apparent hue toward cyan/green.
+</code></pre>
+</section>
+
+<!-- ────── OKLCH+ΔEOK CODE ────── -->
+<section id="code-css4">
+  <div class="section-tag">Code · Method 3</div>
+  <h2>OKLCH + ΔEOK — The CSS Color 4 Algorithm</h2>
+  <p>
+    The proposed CSS Color 4 gamut mapping algorithm. It works like Chroma Reduction, but with an important refinement: before the full binary search, it checks whether a simple clip would be <em>perceptually close enough</em> (within the JND — Just Noticeable Difference) to the correct answer. If so, it takes the shortcut.
+  </p>
+
+  <div class="callout">
+    <div class="callout-title">What is ΔEOK?</div>
+    <p>ΔE<sub>OK</sub> is a perceptual difference metric in OKLab space. It's simply the Euclidean distance between two colors: √(ΔL² + Δa² + Δb²). A value below 0.02 (the JND threshold) means two colors are likely indistinguishable to the human eye. The CSS GMA uses this to avoid expensive binary searching when the clip result is already "good enough."</p>
+  </div>
+
+<pre><code class="language-javascript">const JND = 0.02;   // Just Noticeable Difference threshold
+const ε   = 0.0001; // convergence tolerance for binary search
+
+function CSSgamutMap(origin, destination) {
+  // Work in OKLCH — it has the best perceptual properties
+  // for this kind of chroma manipulation.
+  const origin_OKLCH = to(origin, 'oklch');
+  const L = origin_OKLCH.coords[0];
+
+  // Achromatic edge cases: black and white.
+  if (L >= 1) return { space: destination, coords: [1, 1, 1], alpha: origin.alpha };
+  if (L <= 0) return { space: destination, coords: [0, 0, 0], alpha: origin.alpha };
+
+  // Fast path: already in gamut.
+  if (inGamut(origin, destination)) return to(origin, destination);
+
+  // Pre-check: would clipping produce a nearly-correct result?
+  // This avoids the binary search for colors close to the boundary.
+  let current = clone(origin_OKLCH);
+  let clipped  = clip(current, destination);
+  if (deltaEOK(clipped, current) < JND) return clipped;
+  // ↑ If the clipped result is within JND of the original
+  //   (measured in OKLab), the error is imperceptible. Skip search.
+
+  // Full binary search: reduce chroma until in-gamut.
+  let min = 0, max = origin_OKLCH.coords[1];
+  let min_inGamut = true;
+
+  while (max - min > ε) {
+    const chroma = (min + max) / 2;
+    current.coords[1] = chroma;  // update chroma in-place
+
+    if (min_inGamut && inGamut(current, destination)) {
+      min = chroma;  // raise floor
+    } else {
+      clipped = clip(current, destination);
+      const E = deltaEOK(clipped, current);
+      if (E < JND) {
+        // Clipping at this chroma is perceptually close.
+        if (JND - E < ε) return clipped;  // close enough, stop
+        min_inGamut = false;
+        min = chroma;
+      } else {
+        max = chroma;  // still too far out, reduce more
+      }
+    }
+  }
+
+  return current;
+}
+</code></pre>
+
+  <p>
+    The key difference from the vanilla Chroma Reduction: the CSS GMA's binary search also checks <code>deltaEOK(clipped, current)</code> at each step. This allows it to converge on a point <em>slightly outside</em> the strict gamut boundary if the clip error there is below JND — producing a slightly "looser" result that can look slightly more vibrant in edge cases. In practice, the visual difference is negligible.
+  </p>
+</section>
+
+<!-- ────── CIE LCH CODE ────── -->
+<section id="code-cjs">
+  <div class="section-tag">Code · Method 4</div>
+  <h2>CIE LCH + ΔE2000 — The color.js Default</h2>
+  <p>
+    The oldest of the four methods. It performs the same chroma binary search, but in <strong>CIE LCH</strong> space using <strong>ΔE2000</strong> as the perceptual metric. This was the standard approach before OKLCH existed — historically important, but now largely superseded.
+  </p>
+
+  <div class="callout yellow">
+    <div class="callout-title">CIE LCH vs OKLCH</div>
+    <p>CIE LCH is derived from CIE Lab (1976), which has known non-uniformities — blues and purples in particular are perceptually distorted. OKLCH corrects these by using a more carefully fitted perceptual model. OKLCH's ΔE<sub>OK</sub> is also simpler to compute (just Euclidean distance) vs the complex correction terms in ΔE2000.</p>
+  </div>
+
+<pre><code class="language-javascript">function render_cjs(L = 0.5) {
+  // color.js's toGamut() defaults to CIE LCH with ΔE2000.
+  // It performs a binary search on CIE chroma until
+  // the color maps into the destination gamut.
+
+  for (let a = -0.4; a <= 0.4; a += 0.016) {
+    for (let b = -0.4; b <= 0.4; b += 0.016) {
+
+      // 1. Start in OKLab space (our input representation).
+      const OKLab = { space: 'oklab', coords: [L, a, b] };
+
+      // 2. Convert to sRGB via color.js.
+      //    This will produce out-of-range values if the
+      //    OKLab color is outside the sRGB gamut.
+      const color = to(OKLab, 'srgb');
+
+      // 3. toGamut() applies the CIE LCH gamut mapping algorithm.
+      //    Internally: convert to CIE LCH → binary search on C
+      //    → check ΔE2000 at each step → clamp.
+      //
+      //    ΔE2000 cost breakdown:
+      //      - Convert both colors to CIE Lab
+      //      - Compute ΔL', ΔC', ΔH' with rotation corrections
+      //      - Apply weighting functions SL, SC, SH
+      //      - Apply RT (rotation term, depends on average hue)
+      //    Total: ~70 FP operations per call vs ~3 for ΔE_OK.
+      toGamut(color, 'srgb');
+
+      // 4. Render the pixel.
+      plot(ctx, color, a, b);
+    }
+  }
+}
+
+// Why use this at all?
+// - Legacy compatibility with existing color.js pipelines
+// - ΔE2000 may handle certain hue-angle edge cases better
+// - Some workflows require strict CIE Lab compliance
+// For new work, OKLCH + ΔE_OK is preferred at 3× less cost.
+</code></pre>
+</section>
+
+</main>
+</div><!-- end .layout -->
+
+<!-- ══════════════════ SCRIPTS ══════════════════ -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+  hljs.highlightAll();
+
+  // ── Scroll Spy ──────────────────────────────────────
+  const links = document.querySelectorAll('.toc-link');
+  const sections = document.querySelectorAll('section[id]');
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const active = document.querySelector(`.toc-link[href="#${entry.target.id}"]`);
+        if (active) active.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -60% 0px' });
+  sections.forEach(s => observer.observe(s));
+</script>
+
+<script type="module">
+import Color    from "https://colorjs.io/color.js";
+import serialize from "https://colorjs.io/src/serialize.js";
+import to       from "https://colorjs.io/src/to.js";
+import clone    from "https://colorjs.io/src/clone.js";
+import inGamut  from "https://colorjs.io/src/inGamut.js";
+import toGamut  from "https://colorjs.io/src/toGamut.js";
+import deltaEOK from "https://colorjs.io/src/deltaE/deltaEOK.js";
+
+// ── Config ────────────────────────────────────────────
+const GRID = 50, SIZE = 400, CELL = SIZE / GRID;
+const JND  = 0.02, ε = 0.0001;
+
+// ── Vanilla Math ──────────────────────────────────────
+function linearToGamma(c) {
+  return c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1/2.4) - 0.055;
+}
+function oklabToLinearSRGB(L, a, b) {
+  const l_ = L+0.3963377774*a+0.2158037573*b;
+  const m_ = L-0.1055613458*a-0.0638541728*b;
+  const s_ = L-0.0894841775*a-1.2914855480*b;
+  const l=l_**3, m=m_**3, s=s_**3;
+  return [
+     4.0767416621*l-3.3077115913*m+0.2309699292*s,
+    -1.2684380046*l+2.6097574011*m-0.3413193965*s,
+    -0.0041960863*l-0.7034186147*m+1.7076147010*s,
+  ];
+}
+function inSRGB(rgb) { return rgb.every(v=>v>=0&&v<=1); }
+function oklchToLinearSRGB(L,C,H) {
+  const h=H*Math.PI/180;
+  return oklabToLinearSRGB(L,C*Math.cos(h),C*Math.sin(h));
+}
+function maxChroma(L,H) {
+  let lo=0, hi=0.01;
+  while(hi<0.5 && inSRGB(oklchToLinearSRGB(L,hi,H))) hi*=2;
+  for(let i=0;i<25;i++){
+    const mid=(lo+hi)/2;
+    inSRGB(oklchToLinearSRGB(L,mid,H)) ? lo=mid : hi=mid;
+  }
+  return lo;
+}
+function pickerMap(L,a,b) {
+  if(L<=0) return [0,0,0];
+  if(L>=1) return [1,1,1];
+  const rgb=oklabToLinearSRGB(L,a,b);
+  if(inSRGB(rgb)) return rgb.map(linearToGamma);
+  const C=Math.sqrt(a*a+b*b);
+  let H=Math.atan2(b,a)*180/Math.PI;
+  if(H<0) H+=360;
+  return oklchToLinearSRGB(L,Math.min(C,maxChroma(L,H)),H).map(linearToGamma);
+}
+
+// ── color.js helpers ──────────────────────────────────
+function cjsClip(color, dest) {
+  const dc=to(color,dest);
+  const bounds=Object.values(Color.Space.get(dest).coords).map(c=>c.range||[]);
+  dc.coords=dc.coords.map((c,i)=>{
+    const[mn,mx]=bounds[i];
+    if(mn!==undefined) c=Math.max(mn,c);
+    if(mx!==undefined) c=Math.min(c,mx);
+    return c;
+  });
+  return dc;
+}
+function CSSgamutMap(origin,dest) {
+  const oklch=to(origin,'oklch');
+  const L=oklch.coords[0];
+  if(L>=1) return{space:dest,coords:[1,1,1],alpha:origin.alpha};
+  if(L<=0) return{space:dest,coords:[0,0,0],alpha:origin.alpha};
+  if(inGamut(origin,dest)) return to(origin,dest);
+  let min=0,max=oklch.coords[1],min_ig=true;
+  let cur=clone(oklch), clp=cjsClip(cur,dest);
+  if(deltaEOK(clp,cur)<JND) return clp;
+  while(max-min>ε){
+    const ch=(min+max)/2; cur.coords[1]=ch;
+    if(min_ig&&inGamut(cur,dest)){ min=ch; }
+    else{
+      clp=cjsClip(cur,dest);
+      const E=deltaEOK(clp,cur);
+      if(E<JND){ if(JND-E<ε) return clp; min_ig=false; min=ch; }
+      else max=ch;
+    }
+  }
+  return cur;
+}
+
+// ── Render utilities ──────────────────────────────────
+function setTiming(id, ms) {
+  const el=document.getElementById(id);
+  if(!el) return;
+  el.textContent=`${ms.toFixed(0)} ms`;
+  el.classList.add('ready');
+}
+function hexColor(c) { return serialize(c,{format:'hex',inGamut:false}); }
+
+// ── Draw: single demo canvas ──────────────────────────
+function drawSingle(L) {
+  const ctx=document.getElementById('c-single').getContext('2d');
+  for(let yi=0;yi<GRID;yi++){
+    for(let xi=0;xi<GRID;xi++){
+      const a=(yi/GRID-0.5)*0.8, b=(xi/GRID-0.5)*0.8;
+      const rgb=pickerMap(L,a,b);
+      ctx.fillStyle=`rgb(${rgb[0]*255},${rgb[1]*255},${rgb[2]*255})`;
+      ctx.fillRect(xi*CELL,yi*CELL,CELL,CELL);
+    }
+  }
+}
+
+// ── Draw: comparison methods ──────────────────────────
+function drawCompare(L) {
+  // Method 1: Chroma Reduction
+  {
+    const ctx=document.getElementById('c-cmp-picker').getContext('2d');
+    const t0=performance.now();
+    for(let yi=0;yi<GRID;yi++) for(let xi=0;xi<GRID;xi++){
+      const a=(yi/GRID-0.5)*0.8,b=(xi/GRID-0.5)*0.8;
+      const rgb=pickerMap(L,a,b);
+      ctx.fillStyle=`rgb(${rgb[0]*255},${rgb[1]*255},${rgb[2]*255})`;
+      ctx.fillRect(xi*CELL,yi*CELL,CELL,CELL);
+    }
+    setTiming('t-cmp-picker',performance.now()-t0);
+  }
+  // Method 2: OKLCH+ΔEOK
+  {
+    const ctx=document.getElementById('c-cmp-ok').getContext('2d');
+    const t0=performance.now();
+    for(let yi=0;yi<GRID;yi++) for(let xi=0;xi<GRID;xi++){
+      const a=(yi/GRID-0.5)*0.8,b=(xi/GRID-0.5)*0.8;
+      const color=CSSgamutMap({space:'oklab',coords:[L,a,b]},'srgb');
+      ctx.fillStyle=hexColor(color);
+      ctx.fillRect(xi*CELL,yi*CELL,CELL,CELL);
+    }
+    setTiming('t-cmp-ok',performance.now()-t0);
+  }
+  // Method 3: Clip
+  {
+    const ctx=document.getElementById('c-cmp-clip').getContext('2d');
+    const t0=performance.now();
+    for(let yi=0;yi<GRID;yi++) for(let xi=0;xi<GRID;xi++){
+      const a=(yi/GRID-0.5)*0.8,b=(xi/GRID-0.5)*0.8;
+      const color=cjsClip({space:'oklab',coords:[L,a,b]},'srgb');
+      ctx.fillStyle=hexColor(color);
+      ctx.fillRect(xi*CELL,yi*CELL,CELL,CELL);
+    }
+    setTiming('t-cmp-clip',performance.now()-t0);
+  }
+  // Method 4: CIE LCH
+  {
+    const ctx=document.getElementById('c-cmp-cjs').getContext('2d');
+    const t0=performance.now();
+    for(let yi=0;yi<GRID;yi++) for(let xi=0;xi<GRID;xi++){
+      const a=(yi/GRID-0.5)*0.8,b=(xi/GRID-0.5)*0.8;
+      const color=to({space:'oklab',coords:[L,a,b]},'srgb');
+      toGamut(color,'srgb');
+      ctx.fillStyle=hexColor(color);
+      ctx.fillRect(xi*CELL,yi*CELL,CELL,CELL);
+    }
+    setTiming('t-cmp-cjs',performance.now()-t0);
+  }
+}
+
+// ── Worked example widget ─────────────────────────────
+function fmt(n) { return n.toFixed(4); }
+
+function updateExample() {
+  const L=parseFloat(document.getElementById('ex-L').value);
+  const C=parseFloat(document.getElementById('ex-C').value);
+  const H=parseFloat(document.getElementById('ex-H').value);
+
+  document.getElementById('ex-L-val').textContent=L.toFixed(2);
+  document.getElementById('ex-C-val').textContent=C.toFixed(3);
+  document.getElementById('ex-H-val').textContent=H+'°';
+
+  // Step 1: OKLCH → OKLab
+  const hRad=H*Math.PI/180;
+  const a=C*Math.cos(hRad), b=C*Math.sin(hRad);
+  document.getElementById('ex-a').textContent=fmt(a);
+  document.getElementById('ex-b').textContent=fmt(b);
+
+  // Step 2: OKLab → Linear sRGB
+  const [R,G,Bv]=oklabToLinearSRGB(L,a,b);
+  const setVal=(id,v)=>{
+    const el=document.getElementById(id);
+    el.textContent=fmt(v);
+    el.className='step-val '+(v<0||v>1?'out':'ok');
+  };
+  setVal('ex-R',R); setVal('ex-G',G); setVal('ex-B',Bv);
+
+  // Step 3: Gamut
+  const inG=inSRGB([R,G,Bv]);
+  const cmax=inG?C:maxChroma(L,H);
+  const gEl=document.getElementById('ex-gamut');
+  gEl.textContent=inG?'✓ In Gamut':'✗ Out of Gamut';
+  gEl.className='step-val '+(inG?'ok':'out');
+  document.getElementById('ex-cmax').textContent=fmt(cmax);
+  const redPct=inG?'0%':(((C-cmax)/C*100).toFixed(1)+'%');
+  const redEl=document.getElementById('ex-reduction');
+  redEl.textContent=inG?'None':redPct+' reduction';
+  redEl.className='step-val '+(inG?'ok':'out');
+
+  // Step 4: Final color
+  const C_mapped=Math.min(C,cmax);
+  const finalLinear=oklchToLinearSRGB(L,C_mapped,H);
+  const finalGamma=finalLinear.map(v=>Math.max(0,Math.min(1,linearToGamma(v))));
+  document.getElementById('ex-Rf').textContent=fmt(finalGamma[0]);
+  document.getElementById('ex-Gf').textContent=fmt(finalGamma[1]);
+  document.getElementById('ex-Bf').textContent=fmt(finalGamma[2]);
+
+  // Swatches
+  const clipGamma=[R,G,Bv].map(v=>Math.max(0,Math.min(1,linearToGamma(Math.max(0,Math.min(1,v))))));
+  const swClip=document.getElementById('ex-sw-clip').getContext('2d');
+  swClip.fillStyle=`rgb(${clipGamma.map(v=>Math.round(v*255)).join(',')})`;
+  swClip.fillRect(0,0,80,56);
+  const swMap=document.getElementById('ex-sw-mapped').getContext('2d');
+  swMap.fillStyle=`rgb(${finalGamma.map(v=>Math.round(v*255)).join(',')})`;
+  swMap.fillRect(0,0,80,56);
+
+  // Note
+  const noteEl=document.getElementById('ex-note');
+  if(inG){
+    noteEl.textContent='This color is already within sRGB gamut. Both swatches show the same result — no mapping needed.';
+  } else {
+    const deltaE=Math.sqrt((R-finalLinear[0])**2+(G-finalLinear[1])**2+(Bv-finalLinear[2])**2);
+    noteEl.textContent=`Chroma reduced from ${C.toFixed(3)} → ${C_mapped.toFixed(3)} (${redPct} less saturated). Hue ${H}° is perfectly preserved. Clip swatch on the left has a hue shift — compare the two.`;
+  }
+}
+
+// ── Slider wiring ─────────────────────────────────────
+// Single demo
+const sl1=document.getElementById('sl-single');
+const sv1=document.getElementById('sv-single');
+sl1.addEventListener('input',e=>{
+  sv1.textContent=parseFloat(e.target.value).toFixed(3);
+  drawSingle(parseFloat(e.target.value));
+});
+
+// Comparison
+const sl2=document.getElementById('sl-compare');
+const sv2=document.getElementById('sv-compare');
+sl2.addEventListener('input',e=>{
+  sv2.textContent=parseFloat(e.target.value).toFixed(3);
+  drawCompare(parseFloat(e.target.value));
+});
+
+// Example widget
+['ex-L','ex-C','ex-H'].forEach(id=>{
+  document.getElementById(id).addEventListener('input',updateExample);
+});
+
+// ── Initial renders ───────────────────────────────────
+drawSingle(0.5);
+updateExample();
+
+// Defer the slow comparison render slightly so the page paints first
+setTimeout(()=>drawCompare(0.5), 100);
+</script>
+</body>
+</html>
