@@ -211,7 +211,7 @@ http://localhost:3000
 
 ## License
 
-MIT — use freely.
+CC0-1.0 license — use freely.
 
 ---
 
